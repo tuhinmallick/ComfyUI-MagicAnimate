@@ -83,8 +83,7 @@ class VanillaTemporalModule(nn.Module):
         hidden_states = input_tensor
         hidden_states = self.temporal_transformer(hidden_states, encoder_hidden_states, attention_mask)
 
-        output = hidden_states
-        return output
+        return hidden_states
 
 
 class TemporalTransformer3DModel(nn.Module):
@@ -102,7 +101,7 @@ class TemporalTransformer3DModel(nn.Module):
         activation_fn                      = "geglu",
         attention_bias                     = False,
         upcast_attention                   = False,
-        
+
         cross_frame_attention_mode         = None,
         temporal_position_encoding         = False,
         temporal_position_encoding_max_len = 24,
@@ -131,7 +130,7 @@ class TemporalTransformer3DModel(nn.Module):
                     temporal_position_encoding=temporal_position_encoding,
                     temporal_position_encoding_max_len=temporal_position_encoding_max_len,
                 )
-                for d in range(num_layers)
+                for _ in range(num_layers)
             ]
         )
         self.proj_out = nn.Linear(inner_dim, in_channels)    
@@ -220,11 +219,10 @@ class TemporalTransformerBlock(nn.Module):
                 encoder_hidden_states=encoder_hidden_states if attention_block.is_cross_attention else None,
                 video_length=video_length,
             ) + hidden_states
-            
+
         hidden_states = self.ff(self.ff_norm(hidden_states)) + hidden_states
-        
-        output = hidden_states  
-        return output
+
+        return hidden_states
 
 
 class PositionalEncoding(nn.Module):
@@ -275,17 +273,16 @@ class VersatileAttention(CrossAttention):
     def forward(self, hidden_states, encoder_hidden_states=None, attention_mask=None, video_length=None):
         batch_size, sequence_length, _ = hidden_states.shape
 
-        if self.attention_mode == "Temporal":
-            d = hidden_states.shape[1]
-            hidden_states = rearrange(hidden_states, "(b f) d c -> (b d) f c", f=video_length)
-            
-            if self.pos_encoder is not None:
-                hidden_states = self.pos_encoder(hidden_states)
-            
-            encoder_hidden_states = repeat(encoder_hidden_states, "b n c -> (b d) n c", d=d) if encoder_hidden_states is not None else encoder_hidden_states
-        else:
+        if self.attention_mode != "Temporal":
             raise NotImplementedError
 
+        d = hidden_states.shape[1]
+        hidden_states = rearrange(hidden_states, "(b f) d c -> (b d) f c", f=video_length)
+
+        if self.pos_encoder is not None:
+            hidden_states = self.pos_encoder(hidden_states)
+
+        encoder_hidden_states = repeat(encoder_hidden_states, "b n c -> (b d) n c", d=d) if encoder_hidden_states is not None else encoder_hidden_states
         encoder_hidden_states = encoder_hidden_states
 
         if self.group_norm is not None:
@@ -316,11 +313,10 @@ class VersatileAttention(CrossAttention):
             hidden_states = self._memory_efficient_attention_xformers(query, key, value, attention_mask)
             # Some versions of xformers return output in fp32, cast it back to the dtype of the input
             hidden_states = hidden_states.to(query.dtype)
+        elif self._slice_size is None or query.shape[0] // self._slice_size == 1:
+            hidden_states = self._attention(query, key, value, attention_mask)
         else:
-            if self._slice_size is None or query.shape[0] // self._slice_size == 1:
-                hidden_states = self._attention(query, key, value, attention_mask)
-            else:
-                hidden_states = self._sliced_attention(query, key, value, sequence_length, dim, attention_mask)
+            hidden_states = self._sliced_attention(query, key, value, sequence_length, dim, attention_mask)
 
         # linear proj
         hidden_states = self.to_out[0](hidden_states)

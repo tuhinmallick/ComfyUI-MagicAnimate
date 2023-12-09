@@ -56,9 +56,7 @@ def init_prompt(prompt, pipeline):
         return_tensors="pt",
     )
     text_embeddings = pipeline.text_encoder(text_input.input_ids.to(pipeline.device))[0]
-    context = torch.cat([uncond_embeddings, text_embeddings])
-
-    return context
+    return torch.cat([uncond_embeddings, text_embeddings])
 
 
 def next_step(model_output: Union[torch.FloatTensor, np.ndarray], timestep: int,
@@ -70,13 +68,11 @@ def next_step(model_output: Union[torch.FloatTensor, np.ndarray], timestep: int,
     beta_prod_t = 1 - alpha_prod_t
     next_original_sample = (sample - beta_prod_t ** 0.5 * model_output) / alpha_prod_t ** 0.5
     next_sample_direction = (1 - alpha_prod_t_next) ** 0.5 * model_output
-    next_sample = alpha_prod_t_next ** 0.5 * next_original_sample + next_sample_direction
-    return next_sample
+    return alpha_prod_t_next ** 0.5 * next_original_sample + next_sample_direction
 
 
 def get_noise_pred_single(latents, t, context, unet):
-    noise_pred = unet(latents, t, encoder_hidden_states=context)["sample"]
-    return noise_pred
+    return unet(latents, t, encoder_hidden_states=context)["sample"]
 
 
 @torch.no_grad()
@@ -95,15 +91,12 @@ def ddim_loop(pipeline, ddim_scheduler, latent, num_inv_steps, prompt):
 
 @torch.no_grad()
 def ddim_inversion(pipeline, ddim_scheduler, video_latent, num_inv_steps, prompt=""):
-    ddim_latents = ddim_loop(pipeline, ddim_scheduler, video_latent, num_inv_steps, prompt)
-    return ddim_latents
+    return ddim_loop(pipeline, ddim_scheduler, video_latent, num_inv_steps, prompt)
 
 
 def video2images(path, step=4, length=16, start=0):
     reader = imageio.get_reader(path)
-    frames = []
-    for frame in reader:
-        frames.append(np.array(frame))
+    frames = [np.array(frame) for frame in reader]
     frames = frames[start::step][:length]
     return frames
 

@@ -174,14 +174,18 @@ class AnimationPipeline(DiffusionPipeline):
     def _execution_device(self):
         if self.device != torch.device("meta") or not hasattr(self.unet, "_hf_hook"):
             return self.device
-        for module in self.unet.modules():
-            if (
-                hasattr(module, "_hf_hook")
-                and hasattr(module._hf_hook, "execution_device")
-                and module._hf_hook.execution_device is not None
-            ):
-                return torch.device(module._hf_hook.execution_device)
-        return self.device
+        return next(
+            (
+                torch.device(module._hf_hook.execution_device)
+                for module in self.unet.modules()
+                if (
+                    hasattr(module, "_hf_hook")
+                    and hasattr(module._hf_hook, "execution_device")
+                    and module._hf_hook.execution_device is not None
+                )
+            ),
+            self.device,
+        )
 
     def _encode_prompt(self, prompt, device, num_videos_per_prompt, do_classifier_free_guidance, negative_prompt):
         batch_size = len(prompt) if isinstance(prompt, list) else 1
@@ -314,8 +318,10 @@ class AnimationPipeline(DiffusionPipeline):
         if height % 8 != 0 or width % 8 != 0:
             raise ValueError(f"`height` and `width` have to be divisible by 8 but are {height} and {width}.")
 
-        if (callback_steps is None) or (
-            callback_steps is not None and (not isinstance(callback_steps, int) or callback_steps <= 0)
+        if (
+            callback_steps is None
+            or not isinstance(callback_steps, int)
+            or callback_steps <= 0
         ):
             raise ValueError(
                 f"`callback_steps` has to be a positive integer but is {callback_steps} of type"
@@ -340,13 +346,13 @@ class AnimationPipeline(DiffusionPipeline):
                 latents = torch.cat(latents, dim=0).to(device)
             else:
                 latents = torch.randn(shape, generator=generator, device=rand_device, dtype=dtype).to(device)
-                
+
             latents = latents.repeat(1, 1, video_length//clip_length, 1, 1)
-        else:
-            if latents.shape != shape:
-                raise ValueError(f"Unexpected latents shape, got {latents.shape}, expected {shape}")
+        elif latents.shape == shape:
             latents = latents.to(device)
 
+        else:
+            raise ValueError(f"Unexpected latents shape, got {latents.shape}, expected {shape}")
         # scale the initial noise by the standard deviation required by the scheduler
         latents = latents * self.scheduler.init_noise_sigma
         return latents
@@ -391,9 +397,11 @@ class AnimationPipeline(DiffusionPipeline):
         device = self._execution_device
         images = torch.from_numpy(images).float().to(dtype) # / 127.5 - 1
         images = rearrange(images, "f h w c -> f c h w").to(device)
-        latents = []
-        for frame_idx in range(images.shape[0]):
-            latents.append(self.vae.encode(images[frame_idx:frame_idx+1])['latent_dist'].mean * 0.18215)
+        latents = [
+            self.vae.encode(images[frame_idx : frame_idx + 1])['latent_dist'].mean
+            * 0.18215
+            for frame_idx in range(images.shape[0])
+        ]
         latents = torch.cat(latents)
         return latents
 
@@ -446,16 +454,13 @@ class AnimationPipeline(DiffusionPipeline):
             model_inputs = rearrange(model_inputs, "f c h w -> 1 c f h w")
             noise_pred = self.unet(model_inputs, t, encoder_hidden_states=text_embeddings).sample
             noise_pred = rearrange(noise_pred, "b c f h w -> (b f) c h w")
-            
+
             # compute the previous noise sample x_t-1 -> x_t
             latents, pred_x0 = self.next_step(noise_pred, t, latents)
             latents_list.append(latents)
             pred_x0_list.append(pred_x0)
 
-        if return_intermediates:
-            # return the intermediate laters during inversion
-            return latents, latents_list
-        return latents
+        return (latents, latents_list) if return_intermediates else latents
     
     def interpolate_latents(self, latents: torch.Tensor, interpolation_factor:int, device ):
         if interpolation_factor < 2:
@@ -587,15 +592,15 @@ class AnimationPipeline(DiffusionPipeline):
         # Encode input prompt
         prompt = prompt if isinstance(prompt, list) else [prompt] * batch_size
         if negative_prompt is not None:
-            negative_prompt = negative_prompt if isinstance(negative_prompt, list) else [negative_prompt] * batch_size 
+            negative_prompt = negative_prompt if isinstance(negative_prompt, list) else [negative_prompt] * batch_size
         text_embeddings = self._encode_prompt(
             prompt, device, num_videos_per_prompt, do_classifier_free_guidance, negative_prompt
         )
         text_embeddings = torch.cat([text_embeddings] * context_batch_size)
-        
+
         reference_control_writer = ReferenceAttentionControl(appearance_encoder, do_classifier_free_guidance=True, mode='write', batch_size=context_batch_size)
         reference_control_reader = ReferenceAttentionControl(self.unet, do_classifier_free_guidance=True, mode='read', batch_size=context_batch_size)
-        
+
         is_dist_initialized = kwargs.get("dist", False)
         rank = kwargs.get("rank", 0)
         world_size = kwargs.get("world_size", 1)
@@ -640,20 +645,20 @@ class AnimationPipeline(DiffusionPipeline):
         # Prepare text embeddings for controlnet
         controlnet_text_embeddings = text_embeddings.repeat_interleave(video_length, 0)
         _, controlnet_text_embeddings_c = controlnet_text_embeddings.chunk(2)
-        
+
         controlnet_res_samples_cache_dict = {i:None for i in range(video_length)}
 
         # For img2img setting
         if num_actual_inference_steps is None:
             num_actual_inference_steps = num_inference_steps
-        
+
         if isinstance(source_image, str):
             ref_image_latents = self.images2latents(np.array(Image.open(source_image).resize((width, height)))[None, :], latents_dtype).cuda()
         elif isinstance(source_image, np.ndarray):
             ref_image_latents = self.images2latents(source_image[None, :], latents_dtype).cuda()
-        
+
         context_scheduler = get_context_scheduler(context_schedule)
-        
+
         # Denoising loop
         pbar = comfy.utils.ProgressBar(total=len(timesteps))
         for i, t in tqdm(enumerate(timesteps), total=len(timesteps), disable=(rank!=0)):
@@ -677,7 +682,7 @@ class AnimationPipeline(DiffusionPipeline):
                 encoder_hidden_states=text_embeddings,
                 return_dict=False,
             )
-            
+
             context_queue = list(context_scheduler(
                 0, num_inference_steps, latents.shape[2], context_frames, context_stride, 0
             ))
@@ -694,7 +699,7 @@ class AnimationPipeline(DiffusionPipeline):
                 # prepare inputs for controlnet
                 b, c, f, h, w = controlnet_latent_input.shape
                 controlnet_latent_input = rearrange(controlnet_latent_input, "b c f h w -> (b f) c h w")
-                
+
                 # controlnet inference
                 down_block_res_samples, mid_block_res_sample = self.controlnet(
                     controlnet_latent_input,
@@ -713,10 +718,12 @@ class AnimationPipeline(DiffusionPipeline):
             ))
 
             num_context_batches = math.ceil(len(context_queue) / context_batch_size)
-            global_context = []
-            for i in range(num_context_batches):
-                global_context.append(context_queue[i*context_batch_size: (i+1)*context_batch_size])
-            
+            global_context = [
+                context_queue[
+                    i * context_batch_size : (i + 1) * context_batch_size
+                ]
+                for i in range(num_context_batches)
+            ]
             for context in global_context[rank::world_size]:
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = (
@@ -733,9 +740,9 @@ class AnimationPipeline(DiffusionPipeline):
                     do_classifier_free_guidance,
                     b, f
                 )
-                
+
                 reference_control_reader.update(reference_control_writer)
-                
+
                 # predict the noise residual
                 pred = self.unet(
                     latent_model_input, 
@@ -745,15 +752,15 @@ class AnimationPipeline(DiffusionPipeline):
                     mid_block_additional_residual=mid_block_res_sample,
                     return_dict=False,
                 )[0]
-                
+
                 reference_control_reader.clear()
-                
+
                 pred_uc, pred_c = pred.chunk(2)
                 pred = torch.cat([pred_uc.unsqueeze(0), pred_c.unsqueeze(0)])
                 for j, c in enumerate(context):
                     noise_pred[:, :, c] = noise_pred[:, :, c] + pred[:, j]
                     counter[:, :, c] = counter[:, :, c] + 1
-                    
+
             if is_dist_initialized:
                 noise_pred_gathered = [torch.zeros_like(noise_pred) for _ in range(world_size)]
                 if rank == 0:
@@ -765,8 +772,8 @@ class AnimationPipeline(DiffusionPipeline):
                 if rank == 0:
                     for k in range(1, world_size):
                         for context in global_context[k::world_size]:
-                            for j, c in enumerate(context):
-                                noise_pred[:, :, c] = noise_pred[:, :, c] + noise_pred_gathered[k][:, :, c] 
+                            for c in context:
+                                noise_pred[:, :, c] = noise_pred[:, :, c] + noise_pred_gathered[k][:, :, c]
                                 counter[:, :, c] = counter[:, :, c] + 1
 
             # perform guidance
@@ -776,11 +783,11 @@ class AnimationPipeline(DiffusionPipeline):
 
             # compute the previous noisy sample x_t -> x_t-1
             latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs).prev_sample
-            
+
             if is_dist_initialized:
                 dist.broadcast(latents, 0)
                 dist.barrier()
-            
+
             reference_control_writer.clear()
 
         interpolation_factor = 1
@@ -795,7 +802,4 @@ class AnimationPipeline(DiffusionPipeline):
         if output_type == "tensor":
             video = torch.from_numpy(video)
 
-        if not return_dict:
-            return video
-        
-        return AnimationPipelineOutput(videos=video)
+        return video if not return_dict else AnimationPipelineOutput(videos=video)

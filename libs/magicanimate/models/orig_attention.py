@@ -167,7 +167,7 @@ class Transformer2DModel(ModelMixin, ConfigMixin):
                     only_cross_attention=only_cross_attention,
                     upcast_attention=upcast_attention,
                 )
-                for d in range(num_layers)
+                for _ in range(num_layers)
             ]
         )
 
@@ -244,10 +244,7 @@ class Transformer2DModel(ModelMixin, ConfigMixin):
             # log(p(x_0))
             output = F.log_softmax(logits.double(), dim=1).float()
 
-        if not return_dict:
-            return (output,)
-
-        return Transformer2DModelOutput(sample=output)
+        return Transformer2DModelOutput(sample=output) if return_dict else (output, )
 
 
 class AttentionBlock(nn.Module):
@@ -639,11 +636,10 @@ class CrossAttention(nn.Module):
             hidden_states = self._memory_efficient_attention_xformers(query, key, value, attention_mask)
             # Some versions of xformers return output in fp32, cast it back to the dtype of the input
             hidden_states = hidden_states.to(query.dtype)
+        elif self._slice_size is None or query.shape[0] // self._slice_size == 1:
+            hidden_states = self._attention(query, key, value, attention_mask)
         else:
-            if self._slice_size is None or query.shape[0] // self._slice_size == 1:
-                hidden_states = self._attention(query, key, value, attention_mask)
-            else:
-                hidden_states = self._sliced_attention(query, key, value, sequence_length, dim, attention_mask)
+            hidden_states = self._sliced_attention(query, key, value, sequence_length, dim, attention_mask)
 
         # linear proj
         hidden_states = self.to_out[0](hidden_states)

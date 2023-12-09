@@ -79,7 +79,7 @@ class VideoReader():
 
         video_frames = []
         count = 0
-        for _, frame in enumerate(self._iter_frames()):
+        for frame in self._iter_frames():
             if frame.pts * frame.time_base >= time_:
                 video_frames.append(frame)
                 if count >= self.num_frames - 1:
@@ -89,8 +89,7 @@ class VideoReader():
 
     def _iter_frames(self):
         for packet in self.container.demux(self.video_stream):
-            for frame in packet.decode():
-                yield frame
+            yield from packet.decode()
 
     def _compute_video_stats(self):
         if self.video_stream is None or self.container is None:
