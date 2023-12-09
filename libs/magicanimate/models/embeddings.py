@@ -93,8 +93,7 @@ def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
     emb_h = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[0])  # (H*W, D/2)
     emb_w = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[1])  # (H*W, D/2)
 
-    emb = np.concatenate([emb_h, emb_w], axis=1)  # (H*W, D)
-    return emb
+    return np.concatenate([emb_h, emb_w], axis=1)
 
 
 def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
@@ -114,8 +113,7 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     emb_sin = np.sin(out)  # (M, D/2)
     emb_cos = np.cos(out)  # (M, D/2)
 
-    emb = np.concatenate([emb_sin, emb_cos], axis=1)  # (M, D)
-    return emb
+    return np.concatenate([emb_sin, emb_cos], axis=1)
 
 
 class PatchEmbed(nn.Module):
@@ -177,19 +175,16 @@ class TimestepEmbedding(nn.Module):
         else:
             self.cond_proj = None
 
-        if act_fn == "silu":
-            self.act = nn.SiLU()
+        if act_fn == "gelu":
+            self.act = nn.GELU()
         elif act_fn == "mish":
             self.act = nn.Mish()
-        elif act_fn == "gelu":
-            self.act = nn.GELU()
+        elif act_fn == "silu":
+            self.act = nn.SiLU()
         else:
             raise ValueError(f"{act_fn} does not exist. Make sure to define one of 'silu', 'mish', or 'gelu'")
 
-        if out_dim is not None:
-            time_embed_dim_out = out_dim
-        else:
-            time_embed_dim_out = time_embed_dim
+        time_embed_dim_out = out_dim if out_dim is not None else time_embed_dim
         self.linear_2 = nn.Linear(time_embed_dim, time_embed_dim_out)
 
         if post_act_fn is None:
@@ -226,13 +221,12 @@ class Timesteps(nn.Module):
         self.downscale_freq_shift = downscale_freq_shift
 
     def forward(self, timesteps):
-        t_emb = get_timestep_embedding(
+        return get_timestep_embedding(
             timesteps,
             self.num_channels,
             flip_sin_to_cos=self.flip_sin_to_cos,
             downscale_freq_shift=self.downscale_freq_shift,
         )
-        return t_emb
 
 
 class GaussianFourierProjection(nn.Module):
@@ -258,11 +252,11 @@ class GaussianFourierProjection(nn.Module):
 
         x_proj = x[:, None] * self.weight[None, :] * 2 * np.pi
 
-        if self.flip_sin_to_cos:
-            out = torch.cat([torch.cos(x_proj), torch.sin(x_proj)], dim=-1)
-        else:
-            out = torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
-        return out
+        return (
+            torch.cat([torch.cos(x_proj), torch.sin(x_proj)], dim=-1)
+            if self.flip_sin_to_cos
+            else torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
+        )
 
 
 class ImagePositionalEmbeddings(nn.Module):
@@ -362,8 +356,7 @@ class LabelEmbedding(nn.Module):
         use_dropout = self.dropout_prob > 0
         if (self.training and use_dropout) or (force_drop_ids is not None):
             labels = self.token_drop(labels, force_drop_ids)
-        embeddings = self.embedding_table(labels)
-        return embeddings
+        return self.embedding_table(labels)
 
 
 class CombinedTimestepLabelEmbeddings(nn.Module):
@@ -380,6 +373,4 @@ class CombinedTimestepLabelEmbeddings(nn.Module):
 
         class_labels = self.class_embedder(class_labels)  # (N, D)
 
-        conditioning = timesteps_emb + class_labels  # (N, D)
-
-        return conditioning
+        return timesteps_emb + class_labels

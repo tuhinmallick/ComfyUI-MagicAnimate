@@ -86,7 +86,7 @@ class StableDiffusionControlNetReferencePipeline(StableDiffusionControlNetPipeli
 
         # duplicate mask and ref_image_latents for each generation per prompt, using mps friendly method
         if ref_image_latents.shape[0] < batch_size:
-            if not batch_size % ref_image_latents.shape[0] == 0:
+            if batch_size % ref_image_latents.shape[0] != 0:
                 raise ValueError(
                     "The passed images and the required batch size don't match. Images are supposed to be duplicated"
                     f" to a total batch size of {batch_size}, but {ref_image_latents.shape[0]} images were passed."
@@ -816,7 +816,7 @@ class StableDiffusionControlNetReferencePipeline(StableDiffusionControlNetPipeli
             self.controlnet.to("cpu")
             torch.cuda.empty_cache()
 
-        if not output_type == "latent":
+        if output_type != "latent":
             image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
             image, has_nsfw_concept = self.run_safety_checker(image, device, prompt_embeds.dtype)
         else:

@@ -461,10 +461,7 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
         sample = self.conv_act(sample)
         sample = self.conv_out(sample)
 
-        if not return_dict:
-            return (sample,)
-
-        return UNet3DConditionOutput(sample=sample)
+        return (sample, ) if not return_dict else UNet3DConditionOutput(sample=sample)
 
     @classmethod
     def from_pretrained_2d(cls, pretrained_model_path, subfolder=None, unet_additional_kwargs=None):

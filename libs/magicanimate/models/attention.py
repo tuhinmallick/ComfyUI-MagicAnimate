@@ -95,11 +95,10 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
                     attention_bias=attention_bias,
                     only_cross_attention=only_cross_attention,
                     upcast_attention=upcast_attention,
-
                     unet_use_cross_frame_attention=unet_use_cross_frame_attention,
                     unet_use_temporal_attention=unet_use_temporal_attention,
                 )
-                for d in range(num_layers)
+                for _ in range(num_layers)
             ]
         )
 
@@ -155,10 +154,7 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
         output = hidden_states + residual
 
         output = rearrange(output, "(b f) c h w -> b c f h w", f=video_length)
-        if not return_dict:
-            return (output,)
-
-        return Transformer3DModelOutput(sample=output)
+        return Transformer3DModelOutput(sample=output) if return_dict else (output, )
 
 
 class BasicTransformerBlock(nn.Module):

@@ -89,19 +89,23 @@ class MutualSelfAttentionControl(AttentionBase):
         q_tgt, q_src = q.chunk(2)
         k_tgt, k_src = k.chunk(2)
         v_tgt, v_src = v.chunk(2)
-        
+
         # out_tgt = self.attn_batch(q_tgt, k_src, v_src, num_heads, **kwargs) * self.alpha + \
         #           self.attn_batch(q_tgt, k_tgt, v_tgt, num_heads, **kwargs) * (1 - self.alpha)
         out_tgt = self.attn_batch(q_tgt, torch.cat([k_tgt, k_src], dim=1), torch.cat([v_tgt, v_src], dim=1), num_heads, **kwargs)
         out_src = self.attn_batch(q_src, k_src, v_src, num_heads, **kwargs)
-        out = torch.cat([out_tgt, out_src], dim=0)
-        return out
+        return torch.cat([out_tgt, out_src], dim=0)
     
     def mutual_self_attn_wq(self, q, k, v, sim, attn, is_cross, place_in_unet, num_heads, **kwargs):
         if self.MODE == 'dequeue' and len(self.kv_queue) > 0:
             k_src, v_src = self.kv_queue.pop(0)
-            out = self.attn_batch(q, torch.cat([k, k_src], dim=1), torch.cat([v, v_src], dim=1), num_heads, **kwargs)
-            return out
+            return self.attn_batch(
+                q,
+                torch.cat([k, k_src], dim=1),
+                torch.cat([v, v_src], dim=1),
+                num_heads,
+                **kwargs
+            )
         else:
             self.kv_queue.append([k.clone(), v.clone()])
             return super().forward(q, k, v, sim, attn, is_cross, place_in_unet, num_heads, **kwargs)
@@ -195,7 +199,7 @@ class ReferenceAttentionControl():
                 .to(device)
                 .bool()
             )
-        
+
         def hacked_basic_transformer_inner_forward(
             self,
             hidden_states: torch.FloatTensor,
@@ -254,7 +258,7 @@ class ReferenceAttentionControl():
                             attention_mask=attention_mask,
                         ) + hidden_states[_uc_mask]
                     hidden_states = hidden_states_c.clone()
-                        
+
                     self.bank.clear()
                     if self.attn2 is not None:
                         # Cross-Attention
@@ -282,7 +286,7 @@ class ReferenceAttentionControl():
                         hidden_states = rearrange(hidden_states, "(b d) f c -> (b f) d c", d=d)
 
                     return hidden_states
-                
+
             if self.use_ada_layer_norm_zero:
                 attn_output = gate_msa.unsqueeze(1) * attn_output
             hidden_states = attn_output + hidden_states
@@ -531,9 +535,22 @@ class ReferenceAttentionControl():
 
         if self.reference_attn:
             if self.fusion_blocks == "midup":
-                attn_modules = [module for module in (torch_dfs(self.unet.mid_block)+torch_dfs(self.unet.up_blocks)) if isinstance(module, BasicTransformerBlock) or isinstance(module, _BasicTransformerBlock)]
+                attn_modules = [
+                    module
+                    for module in torch_dfs(self.unet.mid_block)
+                    + torch_dfs(self.unet.up_blocks)
+                    if isinstance(
+                        module, (BasicTransformerBlock, _BasicTransformerBlock)
+                    )
+                ]
             elif self.fusion_blocks == "full":
-                attn_modules = [module for module in torch_dfs(self.unet) if isinstance(module, BasicTransformerBlock) or isinstance(module, _BasicTransformerBlock)]            
+                attn_modules = [
+                    module
+                    for module in torch_dfs(self.unet)
+                    if isinstance(
+                        module, (BasicTransformerBlock, _BasicTransformerBlock)
+                    )
+                ]
             attn_modules = sorted(attn_modules, key=lambda x: -x.norm1.normalized_shape[0])
 
             for i, module in enumerate(attn_modules):
@@ -589,25 +606,17 @@ class ReferenceAttentionControl():
                 # w.bank.clear()
         if self.reference_adain:
             reader_gn_modules = [self.unet.mid_block]
-            
+
             down_blocks = self.unet.down_blocks
-            for w, module in enumerate(down_blocks):
-                reader_gn_modules.append(module)
-
+            reader_gn_modules.extend(iter(down_blocks))
             up_blocks = self.unet.up_blocks
-            for w, module in enumerate(up_blocks):
-                reader_gn_modules.append(module)
-                
+            reader_gn_modules.extend(iter(up_blocks))
             writer_gn_modules = [writer.unet.mid_block]
-            
-            down_blocks = writer.unet.down_blocks
-            for w, module in enumerate(down_blocks):
-                writer_gn_modules.append(module)
 
+            down_blocks = writer.unet.down_blocks
+            writer_gn_modules.extend(iter(down_blocks))
             up_blocks = writer.unet.up_blocks
-            for w, module in enumerate(up_blocks):
-                writer_gn_modules.append(module)
-            
+            writer_gn_modules.extend(iter(up_blocks))
             for r, w in zip(reader_gn_modules, writer_gn_modules):
                 if len(w.mean_bank) > 0 and isinstance(w.mean_bank[0], list):
                     r.mean_bank = [[v.clone().to(dtype) for v in vl] for vl in w.mean_bank]
@@ -619,23 +628,32 @@ class ReferenceAttentionControl():
     def clear(self):
         if self.reference_attn:
             if self.fusion_blocks == "midup":
-                reader_attn_modules = [module for module in (torch_dfs(self.unet.mid_block)+torch_dfs(self.unet.up_blocks)) if isinstance(module, BasicTransformerBlock) or isinstance(module, _BasicTransformerBlock)]
+                reader_attn_modules = [
+                    module
+                    for module in torch_dfs(self.unet.mid_block)
+                    + torch_dfs(self.unet.up_blocks)
+                    if isinstance(
+                        module, (BasicTransformerBlock, _BasicTransformerBlock)
+                    )
+                ]
             elif self.fusion_blocks == "full":
-                reader_attn_modules = [module for module in torch_dfs(self.unet) if isinstance(module, BasicTransformerBlock) or isinstance(module, _BasicTransformerBlock)]
+                reader_attn_modules = [
+                    module
+                    for module in torch_dfs(self.unet)
+                    if isinstance(
+                        module, (BasicTransformerBlock, _BasicTransformerBlock)
+                    )
+                ]
             reader_attn_modules = sorted(reader_attn_modules, key=lambda x: -x.norm1.normalized_shape[0])
             for r in reader_attn_modules:
                 r.bank.clear()
         if self.reference_adain:
             reader_gn_modules = [self.unet.mid_block]
-            
-            down_blocks = self.unet.down_blocks
-            for w, module in enumerate(down_blocks):
-                reader_gn_modules.append(module)
 
+            down_blocks = self.unet.down_blocks
+            reader_gn_modules.extend(iter(down_blocks))
             up_blocks = self.unet.up_blocks
-            for w, module in enumerate(up_blocks):
-                reader_gn_modules.append(module)
-            
+            reader_gn_modules.extend(iter(up_blocks))
             for r in reader_gn_modules:
                 r.mean_bank.clear()
                 r.var_bank.clear()

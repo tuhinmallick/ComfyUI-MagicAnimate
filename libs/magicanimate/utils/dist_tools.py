@@ -19,7 +19,6 @@ def distributed_init(args):
 
     if dist.is_initialized():
         warnings.warn("Distributed is already initialized, cannot initialize twice!")
-        args.rank = dist.get_rank()
     else:
         print(
             f"Distributed Init (Rank {args.rank}): "
@@ -55,7 +54,7 @@ def distributed_init(args):
         dist.all_reduce(torch.zeros(1).cuda())
 
         suppress_output(is_master())
-        args.rank = dist.get_rank()
+    args.rank = dist.get_rank()
     return args.rank
 
 
@@ -64,9 +63,7 @@ def get_rank():
         return 0
     if not dist.is_nccl_available():
         return 0
-    if not dist.is_initialized():
-        return 0
-    return dist.get_rank()
+    return 0 if not dist.is_initialized() else dist.get_rank()
 
 
 def is_master():

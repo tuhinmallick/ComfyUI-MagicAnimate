@@ -25,14 +25,10 @@ class MagicAnimateModelLoader:
         self.models = {}
         
     @classmethod
-    def INPUT_TYPES(s):
+    def INPUT_TYPES(cls):
         magic_animate_checkpoints = folder_paths.get_filename_list("magic_animate")
 
-        devices = []
-        if True: #torch.cuda.is_available():
-            devices.append("cuda")
-        devices.append("cpu")
-
+        devices = ["cuda", "cpu"]
         return {
             "required": {
                 "controlnet" : (magic_animate_checkpoints ,{
@@ -172,7 +168,7 @@ class MagicAnimate:
         self.generator = torch.Generator(device=torch.device("cuda:0"))
         
     @classmethod
-    def INPUT_TYPES(s):
+    def INPUT_TYPES(cls):
         return {
             "required": {
                 "magic_animate_model": ("MAGIC_ANIMATE_MODEL",),
